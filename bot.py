@@ -68,32 +68,39 @@ async def show_stats(message: types.Message, user_id: int):
 
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
-    """Обработчик команды /start."""
-    await message.reply("Welcome to the movie search bot! You can search for movies and series by sending their names.")
+
+    welcome_text = (
+        "<b>Добро пожаловать!</b>\n\n"
+        "Чтобы найти фильм, просто отправьте его название - поисковый алгоритм предложит найденные фильмы и сериалы. \n"
+        "Список команд доступен с помощью /help. "
+        "После успешного поиска бот отправит альбом постеров с подписями к фильмам. Приятного просмотра!\n\n"
+        "<i>Важно: ссылки на найденный фильм или сериал ведут на сторонний сайт. "
+        "Для наилучшего результата рекомендуется иметь блокировщик рекламы, к примеру, uBlock Origin, "
+        "и проверить несколько плееров представленных на сайте.</i>"
+    )
+
+    await message.reply(welcome_text, parse_mode='HTML')
 
 
 @dp.message(Command('help'))
 async def help_command(message: types.Message):
-    """Обработчик команды /help."""
-    help_text = ("Available commands:\n"
-                 "/start - Start the bot\n"
-                 "/help - Show this help message\n"
-                 "/history - Show search history\n"
-                 "/stats - Show film statistics\n"
-                 "Send a movie or series name to search for it.")
+    help_text = ("Команды:\n"
+                 "/start - Запуск бота\n"
+                 "/help -Справка (это сообщение)\n"
+                 "/history - История поиска\n"
+                 "/stats - Статистика фильмов по поиску\n"
+                 "Чтобы найти фильм, просто отправьте его название")
     await message.reply(help_text)
 
 
 @dp.message(Command('history'))
 async def history_command(message: types.Message):
-    """Обработчик команды /history."""
     user_id = message.from_user.id
     await show_history(message, user_id)
 
 
 @dp.message(Command('stats'))
 async def stats_command(message: types.Message):
-    """Обработчик команды /stats."""
     user_id = message.from_user.id
     await show_stats(message, user_id)
 
@@ -130,9 +137,12 @@ async def search_film(message: types.Message):
     for film in films[:RES_CNT]:
         poster = film['posters'][0] if film['posters'] else None
         if poster:
-            caption = (f"<b>{film['name']}</b> ({film['year']})\n"
+            caption = (f"<b>{film['name']}</b>\n"
                        f"⭐ KP: {film['rating_kp'] or 'N/A'} | 🎬 IMDB: {film['rating_imdb'] or 'N/A'}\n"
-                       f"<a href=\"{film['links'][0] if film['links'] else '#'}\">Ссылка на плеер</a>")
+                       f"<b>Год:</b> {film['year']}\n"
+                       f"<a href=\"{film['links'][0] if film['links'] else '#'}\">Ссылка на плеер</a>\n"
+                       f"<b>Описание:</b> {film['description'] if film['description'] else ''}"
+                       )
             media.append(InputMediaPhoto(media=poster, caption=caption, parse_mode='HTML'))
 
     # Заменяем сообщение «ищем»
@@ -142,7 +152,7 @@ async def search_film(message: types.Message):
     if media:
         await bot.send_media_group(chat_id=message.chat.id, media=media)
     else:
-        await message.reply("К сожалению, нет доступных постеров для отправки.")
+        await message.reply("😥 К сожалению, нет доступных постеров для отправки.")
 
     # Обновляем БД по найденым фильмам
     film_titles = [film['name'] for film in films[:RES_CNT]]
