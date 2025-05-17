@@ -32,7 +32,7 @@ async def search_films(query: str, savepage: bool = False):
 
     # Configure Chrome options for headless mode with anti-detection
     chrome_options = Options()
-    #chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")

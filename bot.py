@@ -23,46 +23,45 @@ async def init_db():
                              user_id INTEGER,
                              query TEXT,
                              timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-        # Таблица статистики предложенных фильмов
+        # Таблица статистики предложенных фильмов с уникальным ограничением
         await db.execute('''CREATE TABLE IF NOT EXISTS stats
                             (id INTEGER PRIMARY KEY AUTOINCREMENT,
                              user_id INTEGER,
-                             film_id TEXT,
                              title TEXT,
-                             count INTEGER DEFAULT 1)''')
+                             count INTEGER DEFAULT 1,
+                             UNIQUE(user_id, title))''')
         await db.commit()
 
 
 # --- Вспомогательные функции для отображения данных ---
 
 async def show_history(message: types.Message, user_id: int):
-    """Отображение всей истории поисков без пагинации."""
+    # Отображение истории поисков
     async with aiosqlite.connect('bot.db') as db:
         async with db.execute("SELECT query, timestamp FROM history WHERE user_id = ? ORDER BY timestamp DESC",
                               (user_id,)) as cursor:
             rows = await cursor.fetchall()
 
-    # Формирование текста сообщения
-    text = "Search history:\n" if rows else "No search history."
-    for row in rows:
-        text += f"{row[1]}: {row[0]}\n"
+    text = "История поиска:\n" if rows else "🥲 Вы пока ничего не искали."
+    for row in rows[:20]:
+        # text += f"{row[1]}: {row[0]}\n"
+        text += f"<code>{row[0]}</code>\n"
 
-    await message.reply(text)
+    await message.reply(text, parse_mode="HTML")
 
 
 async def show_stats(message: types.Message, user_id: int):
-    """Отображение всей статистики предложенных фильмов без пагинации."""
+    # Отображение статистики предложенных фильмов
     async with aiosqlite.connect('bot.db') as db:
         async with db.execute("SELECT title, count FROM stats WHERE user_id = ? ORDER BY count DESC",
                               (user_id,)) as cursor:
             rows = await cursor.fetchall()
 
-    # Формирование текста сообщения
-    text = "Film statistics:\n" if rows else "No statistics available."
-    for row in rows:
-        text += f"{row[0]}: {row[1]} times\n"
+    text = "Статистика фильмов в результатах поиска:\n" if rows else "🥲 Вы пока ничего не искали."
+    for row in rows[:20]:
+        text += f"<code>{row[0]}</code>: {row[1]} раз(а)\n"
 
-    await message.reply(text)
+    await message.reply(text, parse_mode='HTML')
 
 
 # --- Обработчики команд ---
@@ -101,34 +100,58 @@ async def stats_command(message: types.Message):
 
 # --- Обработчик текстовых сообщений (поиск) ---
 
+from aiogram.types import InputMediaPhoto
+
+
 @dp.message()
 async def search_film(message: types.Message):
-    """Обработка текстовых сообщений как асинхронных поисковых запросов."""
+    """Обработка текстовых сообщений как асинхронных поисковых запросов и отправка send_media_group."""
+
+    RES_CNT = 5  # Кол-во результатов в поске, max=10
+
     query = message.text
     user_id = message.from_user.id
 
-    # Отправка сообщения "Searching..."
-    searching_message = await message.reply(f"Searching {query}")
+    # Логируем запрос в истории
+    async with aiosqlite.connect('bot.db') as db:
+        await db.execute("INSERT INTO history (user_id, query) VALUES (?, ?)", (user_id, query))
+        await db.commit()
 
-    # Новый асинхронный поиск фильмов через парсер
+    searching = await message.reply(f"🔍 Ищу «{query}»...")
     films = await search_films(query)
 
-    if films:
-        reply_text = ""
-        for film in films:
-            links_text = film['links'][0] if film['links'] else 'No link'
-            poster_text = film['posters'][0] if film['posters'] else 'No poster'
-            reply_text += (f"<b>{film['name']}</b> ({film['year']})\n"
-                           f"KP: {film['rating_kp'] if film['rating_kp'] is not None else 'N/A'} | "
-                           f"IMDB: {film['rating_imdb'] if film['rating_imdb'] is not None else 'N/A'}\n"
-                           f"<a href='{links_text}'>Player page</a> | "
-                           f"<a href='{poster_text}'>Poster</a>\n\n")
-        await bot.edit_message_text(text=reply_text, chat_id=searching_message.chat.id,
-            message_id=searching_message.message_id, parse_mode='HTML', disable_web_page_preview=True)
+    if not films:
+        await bot.edit_message_text(text="❌ Ничего не найдено.", chat_id=searching.chat.id,
+            message_id=searching.message_id)
+        return
+
+    # Собираем mediagroup и обновляем статистику
+    media = []
+    for film in films[:RES_CNT]:
+        poster = film['posters'][0] if film['posters'] else None
+        if poster:
+            caption = (f"<b>{film['name']}</b> ({film['year']})\n"
+                       f"⭐ KP: {film['rating_kp'] or 'N/A'} | 🎬 IMDB: {film['rating_imdb'] or 'N/A'}\n"
+                       f"<a href=\"{film['links'][0] if film['links'] else '#'}\">Ссылка на плеер</a>")
+            media.append(InputMediaPhoto(media=poster, caption=caption, parse_mode='HTML'))
+
+    # Заменяем сообщение «ищем»
+    await bot.edit_message_text(text="🐈 Вот что я нашёл:", chat_id=searching.chat.id, message_id=searching.message_id)
+
+    # Отправляем mediagroup
+    if media:
+        await bot.send_media_group(chat_id=message.chat.id, media=media)
     else:
-        # Если фильм не найден, редактируем сообщение
-        await bot.edit_message_text(text="Film not found.", chat_id=searching_message.chat.id,
-            message_id=searching_message.message_id)
+        await message.reply("К сожалению, нет доступных постеров для отправки.")
+
+    # Обновляем БД по найденым фильмам
+    film_titles = [film['name'] for film in films[:RES_CNT]]
+    async with aiosqlite.connect('bot.db') as db:
+        for title in film_titles:
+            await db.execute("""
+                INSERT INTO stats (user_id, title, count) VALUES (?, ?, 1) ON CONFLICT(user_id, title) DO UPDATE SET count = count + 1
+            """, (user_id, title))
+        await db.commit()
 
 
 # --- Запуск бота ---
